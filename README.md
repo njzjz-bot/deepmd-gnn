@@ -11,6 +11,7 @@ Supported packages and models include:
 
 - [MACE](https://github.com/ACEsuit/mace) (PyTorch version)
 - [NequIP](https://github.com/mir-group/nequip) (PyTorch version)
+- [SevenNet](https://github.com/MDIL-SNU/SevenNet) (property descriptor, optional extra)
 
 After [installing the plugin](#installation), you can train the GNN models using DeePMD-kit, run active learning cycles for the GNN models using [DP-GEN](https://github.com/deepmodeling/dpgen), and perform simulations with MACE and NequIP models using molecular dynamic packages supported by DeePMD-kit, such as [LAMMPS](https://github.com/lammps/lammps) and [AMBER](https://ambermd.org/).
 You can follow [DeePMD-kit documentation](https://docs.deepmodeling.com/projects/deepmd/en/latest/) to train the GNN models using its PyTorch backend, after using the specific [model parameters](#parameters).
@@ -81,6 +82,12 @@ pip install .
 
 Only PyTorch 2.10 or above is supported.
 
+The stable-ABI CUDA edge-index operation preserves the caller's active CUDA
+device. It launches on CUDA's legacy default stream because the extension does
+not link against PyTorch's CUDA runtime; callers using a non-default
+`torch.cuda.Stream` must synchronize that stream with the default stream around
+direct `torch.ops.deepmd_gnn.edge_index` calls.
+
 #### C++ interface plugin
 
 DeePMD-kit version should be v3.0.0b4 or later.
@@ -115,6 +122,118 @@ dp --pt freeze
 
 A frozen model file named `frozen_model.pth` will be generated. You can use it in the MD packages or other interfaces.
 For details, follow [DeePMD-kit documentation](https://docs.deepmodeling.com/projects/deepmd/en/latest/).
+
+### Pretrained MACE descriptors for properties
+
+The regular PyTorch backend can use a trusted native
+`mace.modules.ScaleShiftMACE` checkpoint as the descriptor of a standard
+DeePMD property model. See
+[`examples/property/mace/input.json`](examples/property/mace/input.json):
+
+```json
+"model": {
+  "type": "standard",
+  "type_map": ["H", "O"],
+  "descriptor": {
+    "type": "mace",
+    "model_path": "./trusted_single_head_mace_mp_or_mpa.model",
+    "sel": 64,
+    "trainable": true
+  },
+  "fitting_net": {
+    "type": "property",
+    "property_name": "band_gap",
+    "task_dim": 1,
+    "intensive": true
+  }
+}
+```
+
+`model_path` uses Python pickle loading, so only load checkpoints from a
+trusted source. Neighbor statistics persist the inferred backbone architecture
+into the saved DeePMD checkpoint, so `dp test` and freeze no longer need the
+original `.model` file. The model-level `type_map` must exactly match the
+checkpoint's atomic-number ordering; reordered or subset maps are rejected.
+`sel` is an explicit DeePMD neighbor-list capacity and cannot be inferred from
+MACE. Official single-head MACE-MP-0/MPA-0 89-element checkpoints therefore
+require:
+
+```text
+["H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg",
+ "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr",
+ "Mn", "Fe", "Co", "Ni", "Cu", "Zn", "Ga", "Ge", "As", "Se", "Br",
+ "Kr", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd",
+ "Ag", "Cd", "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba", "La",
+ "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er",
+ "Tm", "Yb", "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au",
+ "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac"]
+```
+
+The descriptor returns only invariant even-scalar (`0e`) channels from the
+final MACE product layer. Its embedding, interaction, and product weights are
+trainable by default together with the DeePMD `PropertyFittingNet`; MACE atomic
+energies, energy readouts, scale/shift, and pair-repulsion terms do not seed
+the property head. Property-label mean and standard deviation remain DeePMD
+statistics. Generic single-head native `ScaleShiftMACE` architectures are
+reconstructed from the checkpoint, including independent first/later
+interaction classes, layer-dependent correlation, named heads, pair
+repulsion, and mixed final irreps. This covers compatible MACE-MP-0 and MPA-0
+checkpoints without changing the separate conservative MACE-OFF energy-model
+conversion path.
+
+The same descriptor can also keep the original MACE energy head as a DeePMD
+fitting (`mace_ener`) and share the backbone with a property branch. This is
+the DPA-style workflow: one pretrained GNN, the native energy/force readout on
+energy data, and `PropertyFittingNet` on property data. It is not a second MLP
+on the property `0e` features, and it does not change `model.type: mace` or the
+LAMMPS energy path. See
+[`examples/property/mace/input_multitask.json`](examples/property/mace/input_multitask.json):
+
+```json
+"model": {
+  "shared_dict": {
+    "type_map": ["H", "O"],
+    "mace_descriptor": {
+      "type": "mace",
+      "model_path": "./trusted_single_head_mace_mp_or_mpa.model",
+      "sel": 64,
+      "trainable": true
+    }
+  },
+  "model_dict": {
+    "force_field": {
+      "type_map": "type_map",
+      "descriptor": "mace_descriptor",
+      "fitting_net": {
+        "type": "mace_ener",
+        "model_path": "./trusted_single_head_mace_mp_or_mpa.model"
+      }
+    },
+    "band_gap": {
+      "type_map": "type_map",
+      "descriptor": "mace_descriptor",
+      "fitting_net": {
+        "type": "property",
+        "property_name": "band_gap",
+        "task_dim": 1,
+        "intensive": true
+      }
+    }
+  }
+}
+```
+
+Set `intensive: true` on the property fitting when labels are per-structure
+(for example band gaps). After `share_params` level 0 the two branches use the
+same backbone object; energy readouts stay only on `mace_ener`. Pair-repulsion
+and per-layer node features are packed beside the property `0e` output so the
+energy head can run without rebuilding the graph. Energy data and property data
+are listed separately under `training.data_dict`.
+
+This descriptor path currently supports only `dp --pt`. The `pt_expt`
+backend, cuEquivariance checkpoint conversion, MACE-MH/multi-head checkpoints,
+type-map subsets, MPI descriptor communication, LAMMPS deployment, and DPRc
+descriptor semantics are out of scope.
 
 ### Exporting MACE models with the PyTorch exportable backend
 
@@ -312,6 +431,95 @@ Below is default values for the MACE model, most of which follows default values
 }
 ```
 
+#### NequIP descriptor for property fitting
+
+The PyTorch backend can reuse the invariant node features immediately after a
+legacy NequIP `EnergyModel`'s `conv_to_output_hidden` layer as a standard
+DeePMD descriptor. This makes it composable with `PropertyFittingNet`, and both
+the NequIP convolutional backbone and the new property fitting head are
+trainable by default. The energy scalar readout and DeePMD `e0` statistics are
+not loaded into the property model.
+
+Create a trusted local artifact from a current DeePMD-GNN `NequipModel`:
+
+```python
+import torch
+from deepmd_gnn.nequip import NequipModel
+
+energy_model = NequipModel(type_map=["O", "H"], sel=64)
+torch.save(energy_model.serialize(), "nequip_model.pt")
+```
+
+Then use it in a standard descriptor/fitting configuration:
+
+```json
+"model": {
+  "type_map": ["O", "H"],
+  "descriptor": {
+    "type": "nequip",
+    "sel": "auto",
+    "model_file": "nequip_model.pt",
+    "trainable": true
+  },
+  "fitting_net": {
+    "type": "property",
+    "property_name": "band_prop",
+    "task_dim": 1,
+    "intensive": true
+  }
+}
+```
+
+See [`examples/property/nequip/input.json`](examples/property/nequip/input.json)
+for a complete input. Artifact loading is strict: the type map and every
+backbone tensor through `conv_to_output_hidden` must match. Only serialized
+`NequipModel.serialize()` payloads for the supported legacy NequIP 0.5/0.6
+architecture are accepted. These artifacts use Python pickle loading, so only
+load files from a trusted source. Native NequIP 0.7+ foundation checkpoints,
+SevenNet checkpoints, `pt_expt`, descriptor MPI communication, and descriptor
+deployment/LAMMPS are not supported by this path.
+
+### SevenNet property descriptor
+
+SevenNet is wired as a **property descriptor**, not as a standalone energy model
+for LAMMPS/MPI. The backbone stays trainable and is composed with DeePMD-kit's
+standard `PropertyFittingNet`. Install the optional extra first:
+
+```sh
+pip install "deepmd-gnn[sevennet]"
+```
+
+SevenNet 0.11+ requires `e3nn>=0.5`. That can conflict with MACE stacks that
+still pin `e3nn` 0.4; use a separate environment when you need both.
+
+This path supports single-task checkpoints such as `7net-0`, `7net-l3i5`, and
+`7net-omat` (a local `.pth` or a SevenNet pretrained keyword). It does **not**
+support Omni/multi-fidelity modal heads, cuEquivariance, FlashTP,
+OpenEquivariance, or SevenNet's LAMMPS/MLIAP plugins. `type_map` must match the
+checkpoint `chemical_species` list exactly, including unused elements.
+
+```json
+"model": {
+  "type": "standard",
+  "type_map": ["H", "O"],
+  "descriptor": {
+    "type": "sevennet",
+    "model_path": "./trusted_single_task_sevennet.pth",
+    "sel": 64,
+    "trainable": true
+  },
+  "fitting_net": {
+    "type": "property",
+    "property_name": "band_gap",
+    "task_dim": 1,
+    "intensive": true,
+    "neuron": [128, 128]
+  }
+}
+```
+
+An example input is under [examples/property/sevennet](examples/property/sevennet).
+
 ## DPRc support
 
 In `deepmd-gnn`, the GNN model can be used in a [DPRc](https://docs.deepmodeling.com/projects/deepmd/en/latest/model/dprc.html) way.
@@ -357,3 +565,6 @@ about (for example in LAMMPS or AMBER).
 
 - [examples/water](examples/water)
 - [examples/dprc](examples/dprc)
+- [examples/property/mace](examples/property/mace)
+- [examples/property/nequip](examples/property/nequip)
+- [examples/property/sevennet](examples/property/sevennet)

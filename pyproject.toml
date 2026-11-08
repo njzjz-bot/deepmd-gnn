@@ -66,6 +66,10 @@ cueq-cu12 = [
     "cuequivariance-torch>=0.10.0",
     "cuequivariance-ops-torch-cu12>=0.10.0",
 ]
+sevennet = [
+    "sevenn>=0.11",
+    "e3nn>=0.5",
+]
 test = [
     'pytest',
     'pytest-cov',
@@ -111,8 +115,10 @@ select = [
     "ALL",
 ]
 ignore = [
+    "CPY001", # Licensing is declared with SPDX identifiers and the project LICENSE.
     "PLR0912",
     "PLR0913", # Too many arguments in function definition
+    "PLR0917", # DeePMD/Torch interfaces require positional-compatible signatures.
     "PLR0915",
     "PLR2004",
     "FBT001",

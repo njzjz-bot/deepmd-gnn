@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from threading import RLock
 from typing import TYPE_CHECKING
 
 import torch
@@ -31,12 +32,18 @@ def precision_from_dtype(dtype: torch.dtype) -> str:
     raise ValueError(msg)
 
 
+_DEFAULT_DTYPE_LOCK = RLock()
+
+
 @contextmanager
 def temporary_default_dtype(dtype: torch.dtype) -> Iterator[None]:
     """Set PyTorch's construction dtype for one backend build and restore it."""
-    old_dtype = torch.get_default_dtype()
-    torch.set_default_dtype(dtype)
-    try:
-        yield
-    finally:
-        torch.set_default_dtype(old_dtype)
+    # Torch's default dtype is process-global; all DeePMD-GNN constructors
+    # that change it must share this reentrant lock, including nested builds.
+    with _DEFAULT_DTYPE_LOCK:
+        old_dtype = torch.get_default_dtype()
+        torch.set_default_dtype(dtype)
+        try:
+            yield
+        finally:
+            torch.set_default_dtype(old_dtype)
