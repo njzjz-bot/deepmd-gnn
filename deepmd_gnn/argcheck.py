@@ -1,7 +1,152 @@
 """Argument check for the MACE model."""
 
 from dargs import Argument
-from deepmd.utils.argcheck import model_args_plugin
+from deepmd.utils.argcheck import (
+    descrpt_args_plugin,
+    fitting_args_plugin,
+    model_args_plugin,
+)
+
+
+@descrpt_args_plugin.register("mace")
+def mace_descriptor_args() -> Argument:
+    """Arguments for a pretrained MACE property descriptor."""
+    return Argument(
+        "mace",
+        dict,
+        [
+            Argument(
+                "sel",
+                int,
+                optional=False,
+                doc="Explicit mixed-type DeePMD neighbor-list capacity.",
+            ),
+            Argument(
+                "model_path",
+                str,
+                optional=True,
+                doc=(
+                    "Path to a trusted native mace.modules.ScaleShiftMACE "
+                    "pickle checkpoint. Required for initialization; saved "
+                    "DeePMD checkpoints restore from the persisted config."
+                ),
+            ),
+            Argument(
+                "config",
+                dict,
+                optional=True,
+                doc=(
+                    "Inferred MACE backbone architecture persisted into the "
+                    "saved model definition so restoration does not reopen "
+                    "the native pickle."
+                ),
+            ),
+            Argument(
+                "trainable",
+                bool,
+                optional=True,
+                default=True,
+                doc="Whether to optimize the pretrained MACE backbone.",
+            ),
+        ],
+        doc=(
+            "PyTorch-only MACE descriptor exposing invariant 0e channels from "
+            "the final product layer."
+        ),
+    )
+
+
+@fitting_args_plugin.register("mace_ener")
+def mace_ener_fitting_args() -> Argument:
+    """Arguments for the original MACE energy head used as a DeePMD fitting."""
+    return Argument(
+        "mace_ener",
+        dict,
+        [
+            Argument(
+                "model_path",
+                str,
+                optional=True,
+                doc=(
+                    "Path to a trusted native mace.modules.ScaleShiftMACE "
+                    "pickle checkpoint. Required for initialization; saved "
+                    "DeePMD checkpoints restore from the persisted config."
+                ),
+            ),
+            Argument(
+                "config",
+                dict,
+                optional=True,
+                doc=(
+                    "Inferred MACE backbone architecture persisted into the "
+                    "saved model definition so restoration does not reopen "
+                    "the native pickle."
+                ),
+            ),
+            Argument(
+                "trainable",
+                bool,
+                optional=True,
+                default=True,
+                doc="Whether to optimize the original MACE energy head.",
+            ),
+        ],
+        doc=(
+            "PT-only fitting that keeps the pretrained MACE energy readout, "
+            "scale/shift, and per-element energies. Forces come from autograd "
+            "through the shared MACE descriptor."
+        ),
+    )
+
+
+@descrpt_args_plugin.register("sevennet")
+def sevennet_descriptor_args() -> Argument:
+    """Arguments for a pretrained SevenNet property descriptor."""
+    return Argument(
+        "sevennet",
+        dict,
+        [
+            Argument(
+                "sel",
+                int,
+                optional=False,
+                doc="Explicit mixed-type DeePMD neighbor-list capacity.",
+            ),
+            Argument(
+                "model_path",
+                str,
+                optional=True,
+                doc=(
+                    "Path to a trusted native SevenNet checkpoint, or a "
+                    "single-task pretrained keyword such as 7net-0. Required "
+                    "for initialization; saved DeePMD checkpoints restore from "
+                    "the persisted config."
+                ),
+            ),
+            Argument(
+                "config",
+                dict,
+                optional=True,
+                doc=(
+                    "Inferred SevenNet backbone architecture persisted into the "
+                    "saved model definition so restoration does not reopen "
+                    "the native checkpoint."
+                ),
+            ),
+            Argument(
+                "trainable",
+                bool,
+                optional=True,
+                default=True,
+                doc="Whether to optimize the pretrained SevenNet backbone.",
+            ),
+        ],
+        doc=(
+            "PT-only invariant descriptor from last-layer SevenNet 0e "
+            "node features. Single-task checkpoints only; no Omni/MF, "
+            "cuEquivariance, FlashTP, or LAMMPS MLIAP."
+        ),
+    )
 
 
 @model_args_plugin.register("mace")
@@ -287,4 +432,48 @@ def nequip_model_args() -> Argument:
             ),
         ],
         doc="Nequip model",
+    )
+
+
+@descrpt_args_plugin.register("nequip")
+def nequip_descriptor_args() -> Argument:
+    """Arguments for the eager legacy NequIP descriptor."""
+    architecture = list(nequip_model_args().sub_fields.values())
+    return Argument(
+        "nequip",
+        dict,
+        [
+            *architecture,
+            Argument(
+                "model_file",
+                str,
+                optional=True,
+                default=None,
+                doc=(
+                    "Path to a trusted torch.save artifact containing "
+                    "NequipModel.serialize() output."
+                ),
+            ),
+            Argument(
+                "config",
+                dict,
+                optional=True,
+                default=None,
+                doc=(
+                    "Inferred backbone architecture saved during training so "
+                    "checkpoints can restore without the source artifact."
+                ),
+            ),
+            Argument(
+                "trainable",
+                bool,
+                optional=True,
+                default=True,
+                doc="Whether to train the NequIP backbone.",
+            ),
+        ],
+        doc=(
+            "PT-only invariant descriptor from legacy NequIP 0.5/0.6 "
+            "conv_to_output_hidden node features."
+        ),
     )
