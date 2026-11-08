@@ -64,7 +64,9 @@ class MaceCheckpointConfig(TypedDict):
 @contextmanager
 def temporary_default_dtype(dtype: torch.dtype) -> Iterator[None]:
     """Use the same process-wide dtype lock as model backend constructors."""
-    from deepmd_gnn.precision import temporary_default_dtype as scoped_dtype  # noqa: PLC0415
+    from deepmd_gnn.precision import (
+        temporary_default_dtype as scoped_dtype,
+    )
 
     with scoped_dtype(dtype):
         yield
