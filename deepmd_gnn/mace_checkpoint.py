@@ -12,6 +12,8 @@ from ase.data import chemical_symbols
 from e3nn import o3
 from mace.modules import ScaleShiftMACE, gate_dict, interaction_classes
 
+from deepmd_gnn.precision import temporary_default_dtype as scoped_dtype
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
@@ -64,10 +66,6 @@ class MaceCheckpointConfig(TypedDict):
 @contextmanager
 def temporary_default_dtype(dtype: torch.dtype) -> Iterator[None]:
     """Use the same process-wide dtype lock as model backend constructors."""
-    from deepmd_gnn.precision import (
-        temporary_default_dtype as scoped_dtype,
-    )
-
     with scoped_dtype(dtype):
         yield
 
